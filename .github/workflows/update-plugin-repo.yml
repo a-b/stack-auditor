@@ -90,5 +90,5 @@ jobs:
             --title "Update stack-auditor to ${version}" \
             --body "Updates stack-auditor plugin to version ${version} for all supported platforms" \
             --draft \
-            --repo cloudfoundry/cli-plugin-repo \
+            --repo a-b/cli-plugin-repo \
             --base master
