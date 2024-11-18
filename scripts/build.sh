@@ -7,8 +7,11 @@ cd "$( dirname "${BASH_SOURCE[0]}" )/.."
 mkdir -p build
 
 if [[ -z "$version" ]]; then #version not provided, use latest git tag
-    git_tag=$(git describe --abbrev=0 --tags)
-    version=${git_tag:1}
+    git_tag=$(git describe --tags --always 2>/dev/null || echo "v0.0.0")
+    if [[ $git_tag =~ ^[0-9a-f]{7,}$ ]]; then
+        git_tag="v0.0.0-${git_tag}"
+    fi
+    version=${git_tag#v}
 fi
 
 export CGO_ENABLED=0

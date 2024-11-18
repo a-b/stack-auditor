@@ -1,0 +1,87 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    env:
+      CF_API:       ${{ vars.CF_API }}
+      CF_USERNAME:  ${{ vars.CF_USERNAME }}
+      CF_PASSWORD:  ${{ secrets.CF_PASSWORD }}
+      TEST_ORG:     "test-org-${{ github.run_id }}"
+      TEST_SPACE:   "test-space-${{ github.run_id }}"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+
+      - name: Go Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ${{ github.workspace }}/go/pkg/mod
+            bin/ginkgo
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}-${{ env.GITHUB_RUN_ID }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install CF CLI
+        run: |
+          curl -fsSL https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/cloudfoundry-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudfoundry-keyring.gpg] https://packages.cloudfoundry.org/debian stable main" | \
+            sudo tee /etc/apt/sources.list.d/cloudfoundry.list > /dev/null
+          echo "::group::Installing CF CLI"
+          sudo apt-get update -qq && \
+          sudo apt-get install -y --no-install-recommends cf8-cli
+          echo "::endgroup::"
+          cf version
+
+      - name: Configure CF CLI and Create Test Environment
+        run: |
+          cf api --skip-ssl-validation "$CF_API"
+          cf auth "$CF_USERNAME" "$CF_PASSWORD"
+          
+          cf create-org "$TEST_ORG"
+          cf target -o "$TEST_ORG"
+          cf create-space "$TEST_SPACE"
+          cf target -o "$TEST_ORG" -s "$TEST_SPACE"
+
+      - name: Install dependencies
+        run: |
+          go mod download
+          go mod verify
+          if [ ! -f "bin/ginkgo" ]; then
+            mkdir -p bin
+            go build -o bin/ginkgo github.com/onsi/ginkgo/v2/ginkgo
+          fi
+
+      - name: Run integration tests
+        env:
+          buildintegration: true
+          CGO_ENABLED: 0
+        run: |
+          export PATH=$PWD/bin:$PATH
+          sleep 2 #TODO: remove
+          # ./scripts/integration.sh
+
+      - name: Cleanup CF Resources
+        if: always() && !env.RUNNER_DEBUG
+        run: |
+          cf target -o    "$TEST_ORG"
+          cf delete-space "$TEST_SPACE" -f
+          cf delete-org   "$TEST_ORG" -f
