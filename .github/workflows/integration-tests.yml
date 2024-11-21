@@ -6,9 +6,120 @@ on:
   pull_request:
     branches: [ master ]
   workflow_dispatch:
+    inputs:
+      lease_id:
+        description: Pre-provisioned environment lease-id to use in tests
+        required: false
+        type: string
+      lease_namespace:
+        description: Pre-provisioned environment lease namespace to use in tests
+        required: false
+        type: string
+      cfd_version:
+        description: Use specific version of CFD. Leave empty to use latest.
+        default: ""
+        type: string
+
+env:
+  SHEPHERD_LEASE_ID: ${{ inputs.lease_id }}
 
 jobs:
+  claim-env:
+    name: Claim Test Environment
+    outputs:
+      leaseid: ${{steps.claim.outputs.leaseid}}
+    defaults:
+      run:
+        shell: bash
+    runs-on: ubuntu-latest
+    container: us-west2-docker.pkg.dev/shepherd-268822/shepherd2/concourse-resource:latest
+    steps:
+      - name: Checkout cli
+        uses: actions/checkout@v4
+        with:
+          ref: ${{needs.get-sha.outputs.gitRef}}
+
+      - name: claim
+        id: claim
+        env:
+          account_token:       ${{ secrets.SHEPHERD_SERVICE_ACCOUNT_TOKEN }}
+          template_argument:   ${{ vars.SHEPHERD_TEMPLATE_ARGUMENT        }}
+          template_name:       ${{ vars.SHEPHERD_TEMPLATE_NAME       || 'cfd-bosh-lite@1.0' }}
+          template_namespace:  ${{ vars.SHEPHERD_TEMPLATE_NAMESPACE  || 'official'          }}
+          lease_duration:      ${{ vars.SHEPHERD_LEASE_DURATION      || '30m'               }}
+          lease_namespace:     ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE || 'tas-devex' }}
+          cfd_version:         ${{ inputs.cfd_version      || vars.CFD_VERSION              || 'v29.1.0' }}
+        run: |
+          shepherd login service-account ${account_token}
+
+          if [[ -z $SHEPHERD_LEASE_ID ]]; then
+
+            if [ -z "$template_argument" ]; then
+              export template_argument=$(cat <<EOF
+          {
+            "gcp_region": "us-west2",
+            "vm_type": "n1-standard-8",
+            "root_disk_gb": 32,
+            "disk_pool_gb": 50,
+            "cfd_version": "${cfd_version}",
+            "additional_opsfiles_b64": ""
+          }
+          EOF
+              )
+            fi
+
+            lease_id=$( shepherd create lease                           \
+                          --template-argument  "$template_argument"     \
+                          --template-namespace "${template_namespace}"  \
+                          --template           "${template_name}"       \
+                          --namespace          "${lease_namespace}"     \
+                          --duration           "${lease_duration}"      \
+                          --description "Claimed by CF CLI workflow ${{ github.workflow_run.url }}" \
+                          --json \
+                        | jq -r .id
+                      )
+          else
+            lease_id=$SHEPHERD_LEASE_ID
+          fi
+
+          echo "Shepherd lease ID: ${lease_id}"
+
+          # Give sometime for the lease to complete. Shepherd may take upto an 3 hours to create an env
+          # if the pool is empty.
+          count=0
+          while [ $count -lt 360 ] ; do
+            sleep 30
+            status=$( shepherd get lease ${lease_id} \
+                        --namespace ${lease_namespace} \
+                        --json \
+                      | jq -r .status
+                    )
+            if [ $status == "LEASED" ] ; then
+              shepherd get lease ${lease_id} \
+                --namespace ${lease_namespace} \
+                --json \
+              | jq .output > metadata.json
+              break
+            elif [ $status == "FAILED" -o $status == "EXPIRED" ] ; then
+              echo "There was an error obtaining the lease. Lease status is ${status}."
+              exit 1
+            else
+              echo "Waiting for environment to be ready. Lease status is ${status}."
+            fi
+            count=$(($count+1))
+          done
+
+          env_name=$(jq -r .name metadata.json)
+          echo "env name is ${env_name}"
+          echo "leaseid=${lease_id}" >> "${GITHUB_OUTPUT}"
+
+          cf_deployment_version=$(jq -r '."cf_deployment_version"' metadata.json)
+          echo "cf_deployment_version is ${cf_deployment_version}"
+          echo "cf_deployment_version=${cf_deployment_version}" >> "${GITHUB_OUTPUT}"
+
   integration-tests:
+    needs:
+      - claim-env
     runs-on: ubuntu-latest
     env:
       CF_API:       ${{ vars.CF_API }}
