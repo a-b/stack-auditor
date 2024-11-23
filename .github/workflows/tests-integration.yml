@@ -96,6 +96,7 @@ jobs:
           # Give sometime for the lease to complete. Shepherd may take upto an 3 hours to create an env
           # if the pool is empty.
           count=0
+          echo "::group::Waiting for Shepherd environment provisioning"
           while [ $count -lt 360 ] ; do
             sleep 30
             status=$( shepherd get lease ${lease_id} \
@@ -117,6 +118,7 @@ jobs:
             fi
             count=$(($count+1))
           done
+          echo "::endgroup::"
 
           if [ $count -eq 360 ]; then
             echo "Error: Timeout waiting for environment"
