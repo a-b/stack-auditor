@@ -45,19 +45,17 @@ jobs:
           lease_id="$SHEPHERD_LEASE_ID"
 
           echo "Shepherd lease ID: ${lease_id}"
-
           shepherd get lease ${lease_id} \
               --namespace ${lease_namespace} \
               --json \
-          | jq .output > metadata.json 
+          | jq -c . > metadata.json 
 
           env_name=$(jq -r .name metadata.json)
           echo "Environment name: ${env_name}"
           echo "leaseid=${lease_id}" >> "${GITHUB_OUTPUT}"
 
-          environment_metadata=$(jq -r . metadata.json)
+          environment_metadata=$(jq -c . metadata.json | sed 's/"/\\"/g')
           echo "environment=${environment_metadata}" >> "${GITHUB_OUTPUT}"
-
       - name: Cache environment metadata
         if: env.SHEPHERD_LEASE_ID == ''
         uses: actions/cache/save@v3
