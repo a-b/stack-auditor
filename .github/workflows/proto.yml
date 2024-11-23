@@ -1,0 +1,126 @@
+name: Prototype
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  prepare-environment:
+    name: Prepare Test Environment
+    outputs:
+      leaseid: ${{steps.claim.outputs.leaseid}}
+      cf_deployment_version: ${{steps.claim.outputs.cf_deployment_version}}
+      environment: ${{steps.claim.outputs.environment}}
+    defaults:
+      run:
+        shell: bash
+    runs-on: ubuntu-latest
+    container: 
+      image: ghcr.io/${{ github.repository }}/base:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+
+      - name: Claim Environment
+        id: claim
+        env:
+          account_token:       ${{ secrets.SHEPHERD_SERVICE_ACCOUNT_TOKEN }}
+          template_argument:   ${{ vars.SHEPHERD_TEMPLATE_ARGUMENT        }}
+          template_name:       ${{ vars.SHEPHERD_TEMPLATE_NAME       || 'cfd-bosh-lite@1.0' }}
+          template_namespace:  ${{ vars.SHEPHERD_TEMPLATE_NAMESPACE  || 'official'          }}
+          lease_duration:      ${{ vars.SHEPHERD_LEASE_DURATION      || '4h'               }}
+          lease_namespace:     ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE || 'tas-devex' }}
+          cfd_version:         ${{ inputs.cfd_version      || vars.CFD_VERSION              || 'v29.1.0' }}
+          poll_interval:       ${{ vars.SHEPHERD_POLL_INTERVAL        || '30'               }}
+        run: |
+          set -eo pipefail
+          shepherd login service-account ${account_token}
+          lease_id="$SHEPHERD_LEASE_ID"
+
+          echo "Shepherd lease ID: ${lease_id}"
+
+          shepherd get lease ${lease_id} \
+              --namespace ${lease_namespace} \
+              --json \
+          | jq .output > metadata.json 
+
+          env_name=$(jq -r .name metadata.json)
+          echo "Environment name: ${env_name}"
+          echo "leaseid=${lease_id}" >> "${GITHUB_OUTPUT}"
+
+          cf_deployment_version=$(jq -r .cf_deployment_version metadata.json)
+          echo "CF Deployment version: ${cf_deployment_version}"
+          echo "cf_deployment_version=${cf_deployment_version}" >> "${GITHUB_OUTPUT}"
+
+          environment_metadata=$(jq -r . metadata.json)
+          echo "environment=${environment_metadata}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache environment metadata
+        if: env.SHEPHERD_LEASE_ID == ''
+        uses: actions/cache/save@v3
+        with:
+          path: metadata.json
+          key: shepherd-env
+
+  run-integration-tests:
+    name: Run Integration Tests
+    needs:
+      - prepare-environment
+    runs-on: cloudfoundry/cli:8.8.3
+    timeout-minutes: 30
+    env:
+      CF_API:      ${{ fromJson(needs.prepare-environment.outputs.environment).api }}
+      CF_USERNAME: ${{ fromJson(needs.prepare-environment.outputs.environment).username }}
+      CF_PASSWORD: ${{ fromJson(needs.prepare-environment.outputs.environment).password }}
+      TEST_ORG:    "test-org-${{ github.run_id }}"
+      TEST_SPACE:  "test-space-${{ github.run_id }}"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go Environment
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+          check-latest: true
+
+      # - name: Setup Go Cache
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/go-build
+      #       ${{ github.workspace }}/go/pkg/mod
+      #       bin/ginkgo
+      #       build
+      #     key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}-${{ env.GITHUB_RUN_ID }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-go-
+
+      # - name: Install CF CLI
+      #   run: |
+      #     curl -fsSL https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | \
+      #       sudo gpg --dearmor -o /usr/share/keyrings/cloudfoundry-keyring.gpg
+      #     echo "deb [signed-by=/usr/share/keyrings/cloudfoundry-keyring.gpg] https://packages.cloudfoundry.org/debian stable main" | \
+      #       sudo tee /etc/apt/sources.list.d/cloudfoundry.list > /dev/null
+      #     echo "::group::Installing CF CLI"
+      #     sudo apt-get update -qq && \
+      #     sudo apt-get install -y --no-install-recommends cf8-cli
+      #     echo "::endgroup::"
+      #     cf version
+
+      - name: Configure CF Environment
+        run: |
+          set -eo pipefail
+          cf api --skip-ssl-validation "$CF_API"
+          cf auth "$CF_USERNAME" "$CF_PASSWORD"
+          
+          cf create-org "$TEST_ORG"
+          cf target -o "$TEST_ORG"
+          cf create-space "$TEST_SPACE"
+          cf target -o "$TEST_ORG" -s "$TEST_SPACE"
