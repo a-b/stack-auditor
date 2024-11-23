@@ -24,15 +24,17 @@ permissions:
 
 jobs:
   prepare-release:
+    name: Prepare Release Version
     runs-on: ubuntu-latest
     outputs:
       release_version: ${{ steps.get_version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
-      - name: Get or calculate version
+      - name: Calculate Version Number
         id: get_version
         shell: bash
         run: |
@@ -61,7 +63,8 @@ jobs:
 
           echo "version=$version" >> $GITHUB_OUTPUT
 
-  build:
+  build-binaries:
+    name: Build Platform Binaries
     needs: prepare-release
     runs-on: ubuntu-latest
     strategy:
@@ -90,9 +93,10 @@ jobs:
             suffix: 64
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Set up Go
+      - name: Setup Go Environment
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -114,37 +118,39 @@ jobs:
             -o "dist/${output_name}" .
           echo "::endgroup::"
 
-      - name: Upload artifact
+      - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: stack-auditor-${{ matrix.os }}-${{ matrix.suffix }}
           path: dist/stack-auditor*
           compression-level: 0
 
-  create-release:
-    needs: [prepare-release, build]
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare-release, build-binaries]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Create and push git tag
+      - name: Create Git Tag
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git tag -f "${{ needs.prepare-release.outputs.release_version }}"
           git push origin "${{ needs.prepare-release.outputs.release_version }}" --force
 
-      - name: Download all artifacts
+      - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Create Release
         run: |
           echo "# Changes in this release" > release_notes.md
 
