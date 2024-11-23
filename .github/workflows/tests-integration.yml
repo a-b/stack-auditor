@@ -48,6 +48,71 @@ jobs:
         with:
           ref: ${{needs.get-sha.outputs.gitRef}}
 
+      - name: Restore cached environment
+        id: cache-restore
+        if: env.SHEPHERD_LEASE_ID == ''
+        uses: actions/cache/restore@v3
+        with:
+          path: metadata.json
+          key: shepherd-env
+          restore-keys: |
+            shepherd-env-
+
+      - name: Check cached environment
+        id: check-cache
+        if: env.SHEPHERD_LEASE_ID == '' && steps.cache-restore.outputs.cache-hit == 'true'
+        env:
+          lease_namespace: ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE || 'tas-devex' }}
+          account_token: ${{ secrets.SHEPHERD_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -eo pipefail
+          shepherd login service-account ${account_token}
+          
+          cached_lease_id=$(jq -r .lease_id metadata.json || echo "")
+          if [ -n "$cached_lease_id" ]; then
+            echo "Checking cached lease ${cached_lease_id}"
+            if lease_info=$(shepherd get lease ${cached_lease_id} --namespace ${lease_namespace} --json 2>/dev/null); then
+              status=$(echo "$lease_info" | jq -r .status)
+              if [ "$status" = "LEASED" ]; then
+                # Check expiration time
+                expiration=$(echo "$lease_info" | jq -r .expiration)
+                current_time=$(date +%s)
+                expiration_time=$(date -d "$expiration" +%s)
+                time_remaining=$((expiration_time - current_time))
+                minutes_remaining=$((time_remaining / 60))
+                
+                if [ $minutes_remaining -le 20 ]; then
+                  echo "Cached environment expires in ${minutes_remaining} minutes, treating as expired"
+                  exit 0
+                fi
+
+                # Check if lease is being used by another workflow
+                if running_workflows=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                  "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=in_progress" | \
+                  jq -r '.workflow_runs[] | select(.id != '${{ github.run_id }}') | .id'); then
+                  
+                  for workflow_id in $running_workflows; do
+                    if curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                      "https://api.github.com/repos/${{ github.repository }}/actions/runs/$workflow_id/jobs" | \
+                      jq -e --arg lease "$cached_lease_id" '.jobs[].steps[] | select(.name=="Claim Environment") | 
+                      select(.output | contains($lease))' > /dev/null; then
+                      echo "Cached environment is in use by another workflow, will create new lease"
+                      exit 0
+                    fi
+                  done
+                fi
+                
+                echo "Found valid and available cached environment (expires in ${minutes_remaining} minutes)"
+                echo "cached_lease_id=${cached_lease_id}" >> $GITHUB_OUTPUT
+                echo "valid=true" >> $GITHUB_OUTPUT
+              else
+                echo "Cached environment status: ${status}, will create new lease"
+              fi
+            else
+              echo "Cached lease not found or expired, will create new lease"
+            fi
+          fi
+
       - name: Claim Environment
         id: claim
         env:
@@ -55,7 +120,7 @@ jobs:
           template_argument:   ${{ vars.SHEPHERD_TEMPLATE_ARGUMENT        }}
           template_name:       ${{ vars.SHEPHERD_TEMPLATE_NAME       || 'cfd-bosh-lite@1.0' }}
           template_namespace:  ${{ vars.SHEPHERD_TEMPLATE_NAMESPACE  || 'official'          }}
-          lease_duration:      ${{ vars.SHEPHERD_LEASE_DURATION      || '30m'               }}
+          lease_duration:      ${{ vars.SHEPHERD_LEASE_DURATION      || '4h'               }}
           lease_namespace:     ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE || 'tas-devex' }}
           cfd_version:         ${{ inputs.cfd_version      || vars.CFD_VERSION              || 'v29.1.0' }}
           poll_interval:       ${{ vars.SHEPHERD_POLL_INTERVAL        || '30'               }}
@@ -63,7 +128,13 @@ jobs:
           set -eo pipefail
           shepherd login service-account ${account_token}
 
-          if [[ -z $SHEPHERD_LEASE_ID ]]; then
+          if [[ -n "$SHEPHERD_LEASE_ID" ]]; then
+            lease_id="$SHEPHERD_LEASE_ID"
+            echo "Using provided lease ID: ${lease_id}"
+          elif [[ -n "${{ steps.check-cache.outputs.valid }}" ]]; then
+            lease_id="${{ steps.check-cache.outputs.cached_lease_id }}"
+            echo "Using cached lease: ${lease_id}"
+          else
             if [ -z "$template_argument" ]; then
               read -r -d '' template_argument << EOM
           {
@@ -86,8 +157,7 @@ jobs:
               --description "Claimed by CF CLI workflow ${{ github.workflow_run.url }}" \
               --json | jq -r .id
             )
-          else
-            lease_id=$SHEPHERD_LEASE_ID
+            echo "Created new lease: ${lease_id}"
           fi
 
           echo "Shepherd lease ID: ${lease_id}"
@@ -101,7 +171,7 @@ jobs:
             
             case $status in
               "LEASED")
-                shepherd get lease ${lease_id} --namespace ${lease_namespace} --json | jq .output > metadata.json
+                shepherd get lease ${lease_id} --namespace ${lease_namespace} --json | jq '.lease_id = "'${lease_id}'" | .' > metadata.json
                 break
                 ;;
               "FAILED"|"EXPIRED")
@@ -132,6 +202,13 @@ jobs:
 
           environment_metadata=$(jq -r . metadata.json)
           echo "environment=${environment_metadata}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache environment metadata
+        if: env.SHEPHERD_LEASE_ID == ''
+        uses: actions/cache/save@v3
+        with:
+          path: metadata.json
+          key: shepherd-env
 
   run-integration-tests:
     name: Run Integration Tests
