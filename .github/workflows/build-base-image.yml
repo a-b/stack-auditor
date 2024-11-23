@@ -12,6 +12,8 @@ on:
       - '.github/workflows/build-base-image.yml'
   workflow_dispatch:
 
+concurrency: base-image
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/base
