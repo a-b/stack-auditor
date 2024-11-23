@@ -5,9 +5,12 @@ on:
     branches: [ master ]
     paths:
       - '.github/docker/base.Dockerfile'
+      - '.github/workflows/build-base-image.yml'
   pull_request:
     paths:
       - '.github/docker/base.Dockerfile'
+      - '.github/workflows/build-base-image.yml'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
