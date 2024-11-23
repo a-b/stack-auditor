@@ -19,6 +19,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    environment:
+      name: Registry
+      url: ${{ steps.deployment.outputs.url }}
 
     steps:
       - name: Checkout repository
@@ -48,3 +51,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Set deployment URL
+        id: deployment
+        run: |
+          # Get the SHA tag from the metadata output
+          SHA_TAG=$(echo '${{ steps.meta.outputs.tags }}' | grep sha | head -n1 | cut -d: -f2)
+          echo "url=https://github.com/${{ github.repository }}/pkgs/container/${{ github.event.repository.name }}%2Fbase/versions/$SHA_TAG" >> $GITHUB_OUTPUT
