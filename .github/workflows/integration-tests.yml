@@ -28,11 +28,17 @@ jobs:
     name: Claim Test Environment
     outputs:
       leaseid: ${{steps.claim.outputs.leaseid}}
+      cf_deployment_version: ${{steps.claim.outputs.cf_deployment_version}}
+      environment: ${{steps.claim.outputs.environment}}
     defaults:
       run:
         shell: bash
     runs-on: ubuntu-latest
-    container: us-west2-docker.pkg.dev/shepherd-268822/shepherd2/concourse-resource:latest
+    container: 
+      image: ghcr.io/${{ github.repository }}/base:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout cli
         uses: actions/checkout@v4
@@ -50,10 +56,10 @@ jobs:
           lease_namespace:     ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE || 'tas-devex' }}
           cfd_version:         ${{ inputs.cfd_version      || vars.CFD_VERSION              || 'v29.1.0' }}
         run: |
+          set -eo pipefail
           shepherd login service-account ${account_token}
 
           if [[ -z $SHEPHERD_LEASE_ID ]]; then
-
             if [ -z "$template_argument" ]; then
               export template_argument=$(cat <<EOF
           {
@@ -69,15 +75,15 @@ jobs:
             fi
 
             lease_id=$( shepherd create lease                           \
-                          --template-argument  "$template_argument"     \
-                          --template-namespace "${template_namespace}"  \
-                          --template           "${template_name}"       \
-                          --namespace          "${lease_namespace}"     \
-                          --duration           "${lease_duration}"      \
-                          --description "Claimed by CF CLI workflow ${{ github.workflow_run.url }}" \
-                          --json \
-                        | jq -r .id
-                      )
+                        --template-argument  "$template_argument"     \
+                        --template-namespace "${template_namespace}"  \
+                        --template           "${template_name}"       \
+                        --namespace          "${lease_namespace}"     \
+                        --duration           "${lease_duration}"      \
+                        --description "Claimed by CF CLI workflow ${{ github.workflow_run.url }}" \
+                        --json \
+                      | jq -r .id
+                    )
           else
             lease_id=$SHEPHERD_LEASE_ID
           fi
@@ -90,10 +96,10 @@ jobs:
           while [ $count -lt 360 ] ; do
             sleep 30
             status=$( shepherd get lease ${lease_id} \
-                        --namespace ${lease_namespace} \
-                        --json \
-                      | jq -r .status
-                    )
+                      --namespace ${lease_namespace} \
+                      --json \
+                    | jq -r .status
+                  )
             if [ $status == "LEASED" ] ; then
               shepherd get lease ${lease_id} \
                 --namespace ${lease_namespace} \
@@ -101,32 +107,41 @@ jobs:
               | jq .output > metadata.json
               break
             elif [ $status == "FAILED" -o $status == "EXPIRED" ] ; then
-              echo "There was an error obtaining the lease. Lease status is ${status}."
+              echo "Error: Lease status is ${status}"
               exit 1
             else
-              echo "Waiting for environment to be ready. Lease status is ${status}."
+              echo "Waiting for environment to be ready. Status: ${status}"
             fi
             count=$(($count+1))
           done
+
+          if [ $count -eq 360 ]; then
+            echo "Error: Timeout waiting for environment"
+            exit 1
+          fi
 
           env_name=$(jq -r .name metadata.json)
           echo "env name is ${env_name}"
           echo "leaseid=${lease_id}" >> "${GITHUB_OUTPUT}"
 
-          cf_deployment_version=$(jq -r '."cf_deployment_version"' metadata.json)
+          cf_deployment_version=$(jq -r .cf_deployment_version metadata.json)
           echo "cf_deployment_version is ${cf_deployment_version}"
           echo "cf_deployment_version=${cf_deployment_version}" >> "${GITHUB_OUTPUT}"
+
+          environment_metadata=$(jq -r . metadata.json)
+          echo "environment=${environment_metadata}" >> "${GITHUB_OUTPUT}"
 
   integration-tests:
     needs:
       - claim-env
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
-      CF_API:       ${{ vars.CF_API }}
-      CF_USERNAME:  ${{ vars.CF_USERNAME }}
-      CF_PASSWORD:  ${{ secrets.CF_PASSWORD }}
-      TEST_ORG:     "test-org-${{ github.run_id }}"
-      TEST_SPACE:   "test-space-${{ github.run_id }}"
+      CF_API:      ${{ fromJson(needs.claim-env.outputs.environment).api }}
+      CF_USERNAME: ${{ fromJson(needs.claim-env.outputs.environment).username }}
+      CF_PASSWORD: ${{ fromJson(needs.claim-env.outputs.environment).password }}
+      TEST_ORG:    "test-org-${{ github.run_id }}"
+      TEST_SPACE:  "test-space-${{ github.run_id }}"
 
     steps:
       - uses: actions/checkout@v4
@@ -137,6 +152,7 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
+          cache: true
           check-latest: true
 
       - name: Go Cache
@@ -146,6 +162,7 @@ jobs:
             ~/.cache/go-build
             ${{ github.workspace }}/go/pkg/mod
             bin/ginkgo
+            build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}-${{ env.GITHUB_RUN_ID }}
           restore-keys: |
             ${{ runner.os }}-go-
@@ -164,6 +181,7 @@ jobs:
 
       - name: Configure CF CLI and Create Test Environment
         run: |
+          set -eo pipefail
           cf api --skip-ssl-validation "$CF_API"
           cf auth "$CF_USERNAME" "$CF_PASSWORD"
           
@@ -181,18 +199,42 @@ jobs:
             go build -o bin/ginkgo github.com/onsi/ginkgo/v2/ginkgo
           fi
 
+      - name: Build plugin
+        id: build
+        env:
+          buildintegration: true
+          CGO_ENABLED: 0
+        run: |
+          echo "::group::Building stack-auditor plugin"
+          time ./scripts/build.sh
+          echo "::endgroup::"
+
       - name: Run integration tests
         env:
           buildintegration: true
           CGO_ENABLED: 0
         run: |
           export PATH=$PWD/bin:$PATH
-          sleep 2 #TODO: remove
-          # ./scripts/integration.sh
+          echo "::group::Running integration tests"
+          time ./scripts/integration.sh
+          echo "::endgroup::"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            integration/
+            scripts/
+            build/
+          retention-days: 5
 
       - name: Cleanup CF Resources
         if: always() && !env.RUNNER_DEBUG
         run: |
-          cf target -o    "$TEST_ORG"
-          cf delete-space "$TEST_SPACE" -f
-          cf delete-org   "$TEST_ORG" -f
+          set -eo pipefail
+          if cf target -o "$TEST_ORG"; then
+            cf delete-space "$TEST_SPACE" -f || true
+            cf delete-org "$TEST_ORG" -f || true
+          fi
