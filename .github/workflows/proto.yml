@@ -4,13 +4,24 @@ on:
   push:
     branches: [ master ]
   workflow_dispatch:
+    inputs:
+      lease_id:
+        description: Pre-provisioned environment lease-id to use in tests
+        required: false
+        type: string
+      lease_namespace:
+        description: Pre-provisioned environment lease namespace to use in tests
+        required: false
+        type: string
+
+env:
+  SHEPHERD_LEASE_ID: ${{ inputs.lease_id }}
 
 jobs:
   prepare-environment:
     name: Prepare Test Environment
     outputs:
       leaseid: ${{steps.claim.outputs.leaseid}}
-      cf_deployment_version: ${{steps.claim.outputs.cf_deployment_version}}
       environment: ${{steps.claim.outputs.environment}}
     defaults:
       run:
@@ -27,13 +38,7 @@ jobs:
         id: claim
         env:
           account_token:       ${{ secrets.SHEPHERD_SERVICE_ACCOUNT_TOKEN }}
-          template_argument:   ${{ vars.SHEPHERD_TEMPLATE_ARGUMENT        }}
-          template_name:       ${{ vars.SHEPHERD_TEMPLATE_NAME       || 'cfd-bosh-lite@1.0' }}
-          template_namespace:  ${{ vars.SHEPHERD_TEMPLATE_NAMESPACE  || 'official'          }}
-          lease_duration:      ${{ vars.SHEPHERD_LEASE_DURATION      || '4h'               }}
-          lease_namespace:     ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE || 'tas-devex' }}
-          cfd_version:         ${{ inputs.cfd_version      || vars.CFD_VERSION              || 'v29.1.0' }}
-          poll_interval:       ${{ vars.SHEPHERD_POLL_INTERVAL        || '30'               }}
+          lease_namespace:     ${{ inputs.lease_namespace  || vars.SHEPHERD_LEASE_NAMESPACE }}
         run: |
           set -eo pipefail
           shepherd login service-account ${account_token}
@@ -49,10 +54,6 @@ jobs:
           env_name=$(jq -r .name metadata.json)
           echo "Environment name: ${env_name}"
           echo "leaseid=${lease_id}" >> "${GITHUB_OUTPUT}"
-
-          cf_deployment_version=$(jq -r .cf_deployment_version metadata.json)
-          echo "CF Deployment version: ${cf_deployment_version}"
-          echo "cf_deployment_version=${cf_deployment_version}" >> "${GITHUB_OUTPUT}"
 
           environment_metadata=$(jq -r . metadata.json)
           echo "environment=${environment_metadata}" >> "${GITHUB_OUTPUT}"
