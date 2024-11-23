@@ -63,7 +63,7 @@ jobs:
           SHA_TAG=$(echo '${{ steps.meta.outputs.tags }}' | grep sha | head -n1 | cut -d: -f2)
 
           PACKAGE_ID=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}%2Fbase/versions" \
-            | jq -r ".[] | select(.metadata.container.tags[] | contains(\"$SHA_TAG\")) | .id")
+            "https://api.github.com/repos/${{ github.repository }}/packages/container/${{ github.event.repository.name }}%2Fbase/versions" \
+            | jq -r ".[] | select(.metadata?.container.tags // [] | any(. == \"$SHA_TAG\")) | .id")
  
           echo "url=https://github.com/${{ github.repository }}/pkgs/container/${{ github.event.repository.name }}%2Fbase/$PACKAGE_ID?tag=$SHA_TAG" >> $GITHUB_OUTPUT
