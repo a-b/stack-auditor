@@ -1,4 +1,4 @@
-name: Unit Tests
+name: Tests / Unit
 
 on:
   push:
@@ -7,11 +7,14 @@ on:
     branches: [ "master" ]
 
 jobs:
-  go-unit-tests:
-    name: Run Go Unit Tests
+  run-unit-tests:
+    name: Run Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
+    
+    strategy:
+      fail-fast: true
+      
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
@@ -23,10 +26,10 @@ jobs:
         check-latest: true
         cache: true
 
-    - name: Install Ginkgo
+    - name: Install Test Framework
       run: go install github.com/onsi/ginkgo/v2/ginkgo@v2
       
-    - name: Run Unit Tests
+    - name: Execute Unit Tests
       run: |
         set -e
         ginkgo -r -v --label-filter="!integration" --keep-going --trace --randomize-all

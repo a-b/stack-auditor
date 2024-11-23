@@ -1,4 +1,4 @@
-name: Integration Tests
+name: Tests / Integration
 
 on:
   push:
@@ -27,8 +27,8 @@ env:
   SHEPHERD_LEASE_ID: ${{ inputs.lease_id }}
 
 jobs:
-  claim-env:
-    name: Claim Test Environment
+  prepare-environment:
+    name: Prepare Test Environment
     outputs:
       leaseid: ${{steps.claim.outputs.leaseid}}
       cf_deployment_version: ${{steps.claim.outputs.cf_deployment_version}}
@@ -43,12 +43,12 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout cli
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           ref: ${{needs.get-sha.outputs.gitRef}}
 
-      - name: claim
+      - name: Claim Environment
         id: claim
         env:
           account_token:       ${{ secrets.SHEPHERD_SERVICE_ACCOUNT_TOKEN }}
@@ -134,31 +134,33 @@ jobs:
           environment_metadata=$(jq -r . metadata.json)
           echo "environment=${environment_metadata}" >> "${GITHUB_OUTPUT}"
 
-  integration-tests:
+  run-integration-tests:
+    name: Run Integration Tests
     needs:
-      - claim-env
+      - prepare-environment
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      CF_API:      ${{ fromJson(needs.claim-env.outputs.environment).api }}
-      CF_USERNAME: ${{ fromJson(needs.claim-env.outputs.environment).username }}
-      CF_PASSWORD: ${{ fromJson(needs.claim-env.outputs.environment).password }}
+      CF_API:      ${{ fromJson(needs.prepare-environment.outputs.environment).api }}
+      CF_USERNAME: ${{ fromJson(needs.prepare-environment.outputs.environment).username }}
+      CF_PASSWORD: ${{ fromJson(needs.prepare-environment.outputs.environment).password }}
       TEST_ORG:    "test-org-${{ github.run_id }}"
       TEST_SPACE:  "test-space-${{ github.run_id }}"
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
+      - name: Setup Go Environment
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
           cache: true
           check-latest: true
 
-      - name: Go Cache
+      - name: Setup Go Cache
         uses: actions/cache@v4
         with:
           path: |
@@ -182,7 +184,7 @@ jobs:
           echo "::endgroup::"
           cf version
 
-      - name: Configure CF CLI and Create Test Environment
+      - name: Configure CF Environment
         run: |
           set -eo pipefail
           cf api --skip-ssl-validation "$CF_API"
@@ -193,7 +195,7 @@ jobs:
           cf create-space "$TEST_SPACE"
           cf target -o "$TEST_ORG" -s "$TEST_SPACE"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           go mod download
           go mod verify
@@ -202,7 +204,7 @@ jobs:
             go build -o bin/ginkgo github.com/onsi/ginkgo/v2/ginkgo
           fi
 
-      - name: Build plugin
+      - name: Build Plugin
         id: build
         env:
           buildintegration: true
@@ -212,7 +214,7 @@ jobs:
           time ./scripts/build.sh
           echo "::endgroup::"
 
-      - name: Run integration tests
+      - name: Execute Integration Tests
         env:
           buildintegration: true
           CGO_ENABLED: 0
@@ -222,7 +224,7 @@ jobs:
           time ./scripts/integration.sh
           echo "::endgroup::"
 
-      - name: Upload test artifacts
+      - name: Upload Test Artifacts
         if: always()
         uses: actions/upload-artifact@v3
         with:
