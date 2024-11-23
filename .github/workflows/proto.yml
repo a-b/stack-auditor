@@ -15,7 +15,7 @@ on:
         type: string
 
 env:
-  SHEPHERD_LEASE_ID: ${{ inputs.lease_id }}
+  SHEPHERD_LEASE_ID: ${{ inputs.lease_id || vars.SHEPHERD_LEASE_ID }}
 
 jobs:
   prepare-environment:
