@@ -70,13 +70,17 @@ jobs:
     runs-on: cloudfoundry/cli:8.8.3
     timeout-minutes: 30
     env:
-      CF_API:      ${{ fromJson(needs.prepare-environment.outputs.environment).api }}
-      CF_USERNAME: ${{ fromJson(needs.prepare-environment.outputs.environment).username }}
-      CF_PASSWORD: ${{ fromJson(needs.prepare-environment.outputs.environment).password }}
+      # CF_API:      #{{ fromJson(needs.prepare-environment.outputs.environment).api }}
+      # CF_USERNAME: #{{ fromJson(needs.prepare-environment.outputs.environment).username }}
+      # CF_PASSWORD: #{{ fromJson(needs.prepare-environment.outputs.environment).password }}
       TEST_ORG:    "test-org-${{ github.run_id }}"
       TEST_SPACE:  "test-space-${{ github.run_id }}"
 
     steps:
+      - name: debug
+        run: |
+          echo "${{ fromJson(needs.prepare-environment.outputs.environment) }}"
+
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
