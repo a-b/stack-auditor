@@ -28,7 +28,7 @@ jobs:
       packages: write
     environment:
       name: Registry
-      url: ${{ steps.deployment.outputs.url }}
+      url: https://github.com/${{ github.repository }}/pkgs/container/stack-auditor%2Fbase
 
     steps:
       - name: Checkout repository
@@ -58,14 +58,3 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-      - name: Set deployment URL
-        id: deployment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          SHA_TAG=$(echo '${{ steps.meta.outputs.tags }}' | grep sha | head -n1 | cut -d: -f2)
-          PACKAGE_ID=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/packages/container/${{ github.event.repository.name }}%2Fbase/versions" \
-            | jq -r --arg tag "$SHA_TAG" '.[] | select(.metadata.container.tags[] == $tag) | .id')
-          echo "url=https://github.com/${{ github.repository }}/pkgs/container/${{ github.event.repository.name }}%2Fbase/$PACKAGE_ID?tag=$SHA_TAG" >> $GITHUB_OUTPUT
