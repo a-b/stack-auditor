@@ -1,13 +1,10 @@
-FROM ubuntu:22.04
+FROM alpine:3.19
 
-# Install required packages
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     curl \
     jq \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates
 
-# Install shepherd CLI
 RUN curl -sSL https://storage.googleapis.com/shepherd-cli/latest/shepherd-linux-amd64 -o /usr/local/bin/shepherd \
     && chmod +x /usr/local/bin/shepherd
 
