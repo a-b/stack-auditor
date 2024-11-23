@@ -12,7 +12,9 @@ on:
       - '.github/workflows/build-base-image.yml'
   workflow_dispatch:
 
-concurrency: base-image
+concurrency:
+  group: base-image
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io

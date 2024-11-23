@@ -20,6 +20,9 @@ on:
         default: ""
         type: string
 
+concurrency:
+  group: base-image
+
 env:
   SHEPHERD_LEASE_ID: ${{ inputs.lease_id }}
 
