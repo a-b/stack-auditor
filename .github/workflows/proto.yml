@@ -81,7 +81,7 @@ jobs:
     steps:
       - name: debug
         run: |
-          echo "${{ fromJson(needs.prepare-environment.outputs.environment) }}"
+          echo "${{ needs.prepare-environment.outputs.environment }}"
 
       - name: Checkout Repository
         uses: actions/checkout@v4
