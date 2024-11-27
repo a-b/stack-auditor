@@ -67,7 +67,9 @@ jobs:
     name: Run Integration Tests
     needs:
       - prepare-environment
-    runs-on: cloudfoundry/cli:8.8.3
+    runs-on: ubuntu-latest
+    container: 
+      image: cloudfoundry/cli:8.8.3
     timeout-minutes: 30
     env:
       # CF_API:      #{{ fromJson(needs.prepare-environment.outputs.environment).api }}
