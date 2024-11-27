@@ -1,4 +1,10 @@
-FROM us-west2-docker.pkg.dev/shepherd-268822/shepherd2/concourse-resource:latest
+FROM us-west2-docker.pkg.dev/shepherd-268822/shepherd2/concourse-resource:latest as builder
+FROM alpine:latest
+
+# Install Python and pip for shepherd
+RUN apk add --no-cache python3 py3-pip
+COPY --from=builder /usr/local/bin/shepherd /usr/local/bin/shepherd
+RUN chmod +x /usr/local/bin/shepherd
 
 # Version variables that can be overridden to lock specific versions
 ENV CREDHUB_VERSION="" \
@@ -44,4 +50,5 @@ RUN set -eux; \
     cf version && \
     credhub --version && \
     bosh --version && \
-    bbl --version
+    bbl --version && \
+    shepherd version
